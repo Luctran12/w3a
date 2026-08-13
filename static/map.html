@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini What3Words — Bản đồ</title>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+
+  #map { position: absolute; top: 0; bottom: 0; left: 0; right: 0; z-index: 0; }
+
+  /* Thanh cong cu noi tren ban do */
+  .panel {
+    position: absolute;
+    top: 12px; left: 12px; right: 12px;
+    z-index: 1000;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .panel input {
+    flex: 1;
+    min-width: 220px;
+    padding: 10px 12px;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    background: white;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  }
+  .panel button {
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    background: #1a73e8;
+    color: white;
+    font-size: 0.95rem;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  }
+  .panel button:hover { background: #1558b0; }
+
+  /* Hop thong tin o dang chon, goc duoi */
+  #info {
+    position: absolute;
+    bottom: 20px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    background: white;
+    padding: 10px 18px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    font-size: 1.05rem;
+    display: none;
+  }
+  #info .address { font-weight: 700; color: #1a73e8; }
+  #info .coord { font-size: 0.8rem; color: #666; margin-top: 2px; }
+
+  /* Canh bao khi zoom qua xa de thay luoi */
+  #zoomHint {
+    position: absolute;
+    top: 70px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    display: none;
+  }
+
+  #errorBox {
+    position: absolute;
+    top: 70px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 1000;
+    background: #d93025;
+    color: white;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="panel">
+  <input id="searchBox" type="text" placeholder="Nhập địa chỉ: tu1.tu2.tu3 rồi Enter" />
+  <button onclick="searchAddress()">Tìm</button>
+</div>
+
+<div id="zoomHint">Phóng to thêm để nhìn thấy lưới ô 5x5m</div>
+<div id="errorBox"></div>
+
+<div id="info">
+  <div class="address" id="infoAddress">—</div>
+  <div class="coord" id="infoCoord">—</div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Cau hinh: nguong zoom de bat dau ve luoi (Leaflet zoom ~19-20 la muc rat gan)
+// ---------------------------------------------------------------------------
+const GRID_MIN_ZOOM = 19;
+const API_BASE = "";  // cung host voi frontend (Flask serve ca 2)
+
+let map, gridLayer, highlightLayer;
+let config = null; // {lat_min, lon_min, lat_max, lon_max, cell_size_m, m_per_deg_lat, m_per_deg_lon}
+
+async function init() {
+  const res = await fetch(`${API_BASE}/api/config`);
+  config = await res.json();
+
+  const centerLat = (config.lat_min + config.lat_max) / 2;
+  const centerLon = (config.lon_min + config.lon_max) / 2;
+
+  map = L.map('map', {
+    maxBounds: [[config.lat_min, config.lon_min], [config.lat_max, config.lon_max]],
+    maxBoundsViscosity: 0.6,
+  }).setView([centerLat, centerLon], 17);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 21,
+    attribution: '&copy; OpenStreetMap contributors',
+  }).addTo(map);
+
+  gridLayer = L.layerGroup().addTo(map);
+  highlightLayer = L.layerGroup().addTo(map);
+
+  map.on('moveend zoomend', redrawGrid);
+  map.on('click', onMapClick);
+
+  redrawGrid();
+}
+
+// ---------------------------------------------------------------------------
+// Ve luoi 5x5m trong pham vi dang nhin thay (chi khi zoom du gan)
+// ---------------------------------------------------------------------------
+function redrawGrid() {
+  gridLayer.clearLayers();
+  const zoomHint = document.getElementById('zoomHint');
+
+  if (map.getZoom() < GRID_MIN_ZOOM) {
+    zoomHint.style.display = 'block';
+    return;
+  }
+  zoomHint.style.display = 'none';
+
+  const bounds = map.getBounds();
+  // Gioi han trong vung ban do ho tro
+  const lat0 = Math.max(bounds.getSouth(), config.lat_min);
+  const lat1 = Math.min(bounds.getNorth(), config.lat_max);
+  const lon0 = Math.max(bounds.getWest(), config.lon_min);
+  const lon1 = Math.min(bounds.getEast(), config.lon_max);
+  if (lat0 >= lat1 || lon0 >= lon1) return;
+
+  const cell = config.cell_size_m;
+  const dLat = cell / config.m_per_deg_lat;
+  const dLon = cell / config.m_per_deg_lon;
+
+  // Chi so hang/cot bat dau/ket thuc trong vung nhin thay
+  const colStart = Math.floor((lon0 - config.lon_min) / dLon);
+  const colEnd   = Math.ceil((lon1 - config.lon_min) / dLon);
+  const rowStart = Math.floor((lat0 - config.lat_min) / dLat);
+  const rowEnd   = Math.ceil((lat1 - config.lat_min) / dLat);
+
+  // An toan: neu qua nhieu duong (zoom chua du gan / vung qua rong) thi bo qua
+  const totalLines = (colEnd - colStart) + (rowEnd - rowStart);
+  if (totalLines > 2000) {
+    zoomHint.style.display = 'block';
+    zoomHint.textContent = 'Phóng to thêm nữa để hiển thị lưới (vùng hiện tại quá rộng)';
+    return;
+  }
+
+  const style = { color: '#e63946', weight: 1, opacity: 0.55, interactive: false };
+
+  for (let c = colStart; c <= colEnd; c++) {
+    const lon = config.lon_min + c * dLon;
+    L.polyline([[lat0, lon], [lat1, lon]], style).addTo(gridLayer);
+  }
+  for (let r = rowStart; r <= rowEnd; r++) {
+    const lat = config.lat_min + r * dLat;
+    L.polyline([[lat, lon0], [lat, lon1]], style).addTo(gridLayer);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Click tren ban do -> goi API to-words -> to sang o duoc chon
+// ---------------------------------------------------------------------------
+async function onMapClick(e) {
+  hideError();
+  const { lat, lng } = e.latlng;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/to-words?lat=${lat}&lon=${lng}`);
+    const data = await res.json();
+    if (!res.ok) {
+      showError(data.error || 'Lỗi không xác định');
+      return;
+    }
+    showCell(data);
+  } catch (err) {
+    showError('Không gọi được API: ' + err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tim theo dia chi (o nhap tay) -> API to-coordinate -> pan toi va to sang
+// ---------------------------------------------------------------------------
+async function searchAddress() {
+  hideError();
+  const address = document.getElementById('searchBox').value.trim();
+  if (!address) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/to-coordinate?address=${encodeURIComponent(address)}`);
+    const data = await res.json();
+    if (!res.ok) {
+      showError(data.error || 'Lỗi không xác định');
+      return;
+    }
+    map.setView([data.lat, data.lon], Math.max(map.getZoom(), GRID_MIN_ZOOM));
+    showCell(data);
+  } catch (err) {
+    showError('Không gọi được API: ' + err);
+  }
+}
+document.getElementById('searchBox').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') searchAddress();
+});
+
+// ---------------------------------------------------------------------------
+// Hien thi o duoc chon: to nen + popup + hop thong tin duoi man hinh
+// ---------------------------------------------------------------------------
+function showCell(data) {
+  highlightLayer.clearLayers();
+
+  const sw = data.bounds.sw, ne = data.bounds.ne;
+  const rect = L.rectangle([sw, ne], {
+    color: '#1a73e8', weight: 2, fillColor: '#1a73e8', fillOpacity: 0.25,
+  }).addTo(highlightLayer);
+
+  rect.bindPopup(`<b>${data.address}</b>`).openPopup();
+
+  document.getElementById('info').style.display = 'block';
+  document.getElementById('infoAddress').textContent = data.address;
+  document.getElementById('infoCoord').textContent =
+    `${data.lat.toFixed(6)}, ${data.lon.toFixed(6)}`;
+}
+
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.textContent = msg;
+  box.style.display = 'block';
+  setTimeout(() => { box.style.display = 'none'; }, 3000);
+}
+function hideError() {
+  document.getElementById('errorBox').style.display = 'none';
+}
+
+init();
+</script>
+
+</body>
+</html>

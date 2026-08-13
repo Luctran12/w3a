@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Mini What3Words</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 640px;
+    margin: 40px auto;
+    padding: 0 16px;
+    color: #222;
+  }
+  h1 { font-size: 1.4rem; }
+  .card {
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  label { display: block; font-size: 0.85rem; color: #555; margin-top: 10px; }
+  input {
+    width: 100%;
+    padding: 8px 10px;
+    margin-top: 4px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 1rem;
+    box-sizing: border-box;
+  }
+  button {
+    margin-top: 14px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: #1a73e8;
+    color: white;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button:hover { background: #1558b0; }
+  .result {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 0.95rem;
+    white-space: pre-wrap;
+  }
+  .result.ok { background: #e6f4ea; color: #1e4620; }
+  .result.err { background: #fdecea; color: #611a15; }
+  .address { font-weight: 600; font-size: 1.1rem; color: #1a73e8; }
+</style>
+</head>
+<body>
+
+<h1>Mini What3Words — demo</h1>
+
+<div class="card">
+  <h2>1. Toạ độ → 3 từ</h2>
+  <label>Vĩ độ (lat)</label>
+  <input id="lat" type="number" step="any" placeholder="10.7769">
+  <label>Kinh độ (lon)</label>
+  <input id="lon" type="number" step="any" placeholder="106.7009">
+  <button onclick="convertToWords()">Chuyển đổi</button>
+  <div id="wordsResult"></div>
+</div>
+
+<div class="card">
+  <h2>2. 3 từ → Toạ độ</h2>
+  <label>Địa chỉ (dạng tu1.tu2.tu3)</label>
+  <input id="address" type="text" placeholder="pitab.wemab.kodab">
+  <button onclick="convertToCoord()">Chuyển đổi</button>
+  <div id="coordResult"></div>
+</div>
+
+<script>
+async function convertToWords() {
+  const lat = document.getElementById('lat').value;
+  const lon = document.getElementById('lon').value;
+  const box = document.getElementById('wordsResult');
+  box.innerHTML = '';
+
+  if (lat === '' || lon === '') {
+    box.innerHTML = '<div class="result err">Vui lòng nhập đủ lat và lon.</div>';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/to-words?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
+    const data = await res.json();
+    if (!res.ok) {
+      box.innerHTML = `<div class="result err">Lỗi: ${data.error}</div>`;
+      return;
+    }
+    box.innerHTML = `<div class="result ok">Địa chỉ: <span class="address">${data.address}</span></div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="result err">Không gọi được API: ${e}</div>`;
+  }
+}
+
+async function convertToCoord() {
+  const address = document.getElementById('address').value.trim();
+  const box = document.getElementById('coordResult');
+  box.innerHTML = '';
+
+  if (!address) {
+    box.innerHTML = '<div class="result err">Vui lòng nhập địa chỉ dạng tu1.tu2.tu3.</div>';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/to-coordinate?address=${encodeURIComponent(address)}`);
+    const data = await res.json();
+    if (!res.ok) {
+      box.innerHTML = `<div class="result err">Lỗi: ${data.error}</div>`;
+      return;
+    }
+    box.innerHTML = `<div class="result ok">Toạ độ: <b>${data.lat.toFixed(6)}, ${data.lon.toFixed(6)}</b></div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="result err">Không gọi được API: ${e}</div>`;
+  }
+}
+</script>
+
+</body>
+</html>
